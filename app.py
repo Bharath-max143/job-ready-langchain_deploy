@@ -6,22 +6,19 @@ from typing import TypedDict
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse
-
 from langserve import add_routes
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
-
 from pydantic import BaseModel, Field
 
 from langgraph.graph import StateGraph, END
-
 from pypdf import PdfReader
 
 
 # ============================================================
-# 1. API KEY
+# GOOGLE API KEY
 # ============================================================
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -31,7 +28,7 @@ if not GOOGLE_API_KEY:
 
 
 # ============================================================
-# 2. LLM
+# LLM
 # ============================================================
 
 llm = ChatGoogleGenerativeAI(
@@ -42,7 +39,43 @@ llm = ChatGoogleGenerativeAI(
 
 
 # ============================================================
-# 3. LANGGRAPH STATE
+# HELPER - CONVERT AI RESPONSE TO TEXT
+# ============================================================
+
+def content_to_text(content):
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts = []
+
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+
+            elif isinstance(item, dict):
+                if "text" in item:
+                    parts.append(str(item["text"]))
+                elif "content" in item:
+                    parts.append(str(item["content"]))
+
+            elif hasattr(item, "text"):
+                parts.append(str(item.text))
+
+        return "\n".join(parts)
+
+    if isinstance(content, dict):
+        if "text" in content:
+            return str(content["text"])
+
+        if "content" in content:
+            return str(content["content"])
+
+    return str(content)
+
+
+# ============================================================
+# LANGGRAPH STATE
 # ============================================================
 
 class CareerState(TypedDict, total=False):
@@ -59,33 +92,31 @@ class CareerState(TypedDict, total=False):
 
 
 # ============================================================
-# 4. JOB SEARCH NODE
+# NODE 1 - JOB SEARCH / RECOMMENDATIONS
 # ============================================================
 
 def job_search(state: CareerState):
 
-    prompt = ChatPromptTemplate.from_template(
-        """
-        You are an AI career assistant.
+    prompt = ChatPromptTemplate.from_template("""
+You are an AI career assistant.
 
-        Student resume:
-        {resume}
+Student resume:
+{resume}
 
-        Target role:
-        {role}
+Target role:
+{role}
 
-        Find suitable job-role recommendations based on the
-        student's skills and target role.
+Find suitable job-role recommendations based on the
+student's skills and target role.
 
-        Give a short answer with:
+Give a short answer with:
 
-        1. Suitable job roles
-        2. Important technologies
-        3. What the student should prepare
+1. Suitable job roles
+2. Important technologies
+3. What the student should prepare
 
-        Do not invent specific companies or job openings.
-        """
-    )
+Do not invent specific companies or job openings.
+""")
 
     chain = prompt | llm
 
@@ -95,36 +126,34 @@ def job_search(state: CareerState):
     })
 
     return {
-        "job_results": response.content
+        "job_results": content_to_text(response.content)
     }
 
 
 # ============================================================
-# 5. SKILL GAP NODE
+# NODE 2 - SKILL GAP
 # ============================================================
 
 def skill_gap(state: CareerState):
 
-    prompt = ChatPromptTemplate.from_template(
-        """
-        Analyze this student's resume for the target role.
+    prompt = ChatPromptTemplate.from_template("""
+Analyze this student's resume for the target role.
 
-        RESUME:
-        {resume}
+RESUME:
+{resume}
 
-        TARGET ROLE:
-        {role}
+TARGET ROLE:
+{role}
 
-        Identify:
+Identify:
 
-        1. Existing strengths
-        2. Missing skills
-        3. Skills that should be prioritized
-        4. Interview preparation areas
+1. Existing strengths
+2. Missing skills
+3. Skills that should be prioritized
+4. Interview preparation areas
 
-        Keep the answer concise.
-        """
-    )
+Keep the answer concise.
+""")
 
     chain = prompt | llm
 
@@ -134,36 +163,34 @@ def skill_gap(state: CareerState):
     })
 
     return {
-        "skill_gap": response.content
+        "skill_gap": content_to_text(response.content)
     }
 
 
 # ============================================================
-# 6. PROJECT SUGGESTIONS NODE
+# NODE 3 - PROJECT SUGGESTIONS
 # ============================================================
 
 def project_suggestions(state: CareerState):
 
-    prompt = ChatPromptTemplate.from_template(
-        """
-        Suggest practical projects for a student who wants to
-        become an {role}.
+    prompt = ChatPromptTemplate.from_template("""
+Suggest practical projects for a student who wants to
+become an {role}.
 
-        STUDENT RESUME:
-        {resume}
+STUDENT RESUME:
+{resume}
 
-        Suggest 3 projects.
+Suggest 3 projects.
 
-        For each project provide:
+For each project provide:
 
-        - Project name
-        - Short description
-        - Technologies
-        - Why it helps for placement
+- Project name
+- Short description
+- Technologies
+- Why it helps for placement
 
-        Prefer AI/ML/Generative AI projects when appropriate.
-        """
-    )
+Prefer AI/ML/Generative AI projects when appropriate.
+""")
 
     chain = prompt | llm
 
@@ -173,40 +200,38 @@ def project_suggestions(state: CareerState):
     })
 
     return {
-        "project_suggestions": response.content
+        "project_suggestions": content_to_text(response.content)
     }
 
 
 # ============================================================
-# 7. GITHUB CHECK NODE
+# NODE 4 - GITHUB ANALYSIS
 # ============================================================
 
 def github_check(state: CareerState):
 
-    prompt = ChatPromptTemplate.from_template(
-        """
-        Analyze the student's GitHub information.
+    prompt = ChatPromptTemplate.from_template("""
+Analyze the student's GitHub information.
 
-        GitHub username:
-        {github_id}
+GitHub username:
+{github_id}
 
-        Resume:
-        {resume}
+Resume:
+{resume}
 
-        Important:
+Important:
 
-        You cannot access the GitHub account directly.
+You cannot access the GitHub account directly.
 
-        Therefore, do NOT invent repository names, commits,
-        stars, followers, or activity.
+Therefore, do NOT invent repository names, commits,
+stars, followers, or activity.
 
-        Instead provide:
+Instead provide:
 
-        - What should be checked in the GitHub profile
-        - What makes a GitHub profile placement-ready
-        - Suggestions to improve the profile
-        """
-    )
+- What should be checked in the GitHub profile
+- What makes a GitHub profile placement-ready
+- Suggestions to improve the profile
+""")
 
     chain = prompt | llm
 
@@ -216,50 +241,50 @@ def github_check(state: CareerState):
     })
 
     return {
-        "github_analysis": response.content
+        "github_analysis": content_to_text(response.content)
     }
 
 
 # ============================================================
-# 8. FINAL SYNTHESIS NODE
+# NODE 5 - FINAL SYNTHESIS
 # ============================================================
 
 def final_synthesis(state: CareerState):
 
-    prompt = ChatPromptTemplate.from_template(
-        """
-        You are a placement-ready AI career advisor.
+    prompt = ChatPromptTemplate.from_template("""
+You are a placement-ready AI career advisor.
 
-        Combine the following analysis into one clear final answer.
+Combine the following analysis into one clear final answer.
 
-        JOB RECOMMENDATIONS:
-        {job_results}
+JOB RECOMMENDATIONS:
+{job_results}
 
-        SKILL GAP:
-        {skill_gap}
+SKILL GAP:
+{skill_gap}
 
-        PROJECT SUGGESTIONS:
-        {project_suggestions}
+PROJECT SUGGESTIONS:
+{project_suggestions}
 
-        GITHUB ANALYSIS:
-        {github_analysis}
+GITHUB ANALYSIS:
+{github_analysis}
 
-        STUDENT QUESTION:
-        {question}
+STUDENT QUESTION:
+{question}
 
-        Give a concise final career plan.
+Give a concise final career plan.
 
-        Include:
+Include:
 
-        1. Current position
-        2. Main skill gaps
-        3. Recommended projects
-        4. Job preparation plan
-        5. Final advice
+1. Current position
+2. Main skill gaps
+3. Recommended projects
+4. Job preparation plan
+5. Final advice
 
-        Do not mention internal nodes or LangGraph.
-        """
-    )
+Use clear headings and bullet points.
+
+Do not mention internal nodes or LangGraph.
+""")
 
     chain = prompt | llm
 
@@ -272,12 +297,12 @@ def final_synthesis(state: CareerState):
     })
 
     return {
-        "final_answer": response.content
+        "final_answer": content_to_text(response.content)
     }
 
 
 # ============================================================
-# 9. BUILD LANGGRAPH
+# LANGGRAPH
 # ============================================================
 
 builder = StateGraph(CareerState)
@@ -300,16 +325,17 @@ graph = builder.compile()
 
 
 # ============================================================
-# 10. LANGSERVE INPUT
+# LANGSERVE INPUT
 # ============================================================
 
 class CareerAgentInput(BaseModel):
+
     question: str = Field(
         description="The student's career question"
     )
 
     resume: str = Field(
-        description="Extracted resume text"
+        description="The student's resume text"
     )
 
     role: str = Field(
@@ -321,15 +347,22 @@ class CareerAgentInput(BaseModel):
     )
 
 
+# ============================================================
+# LANGSERVE OUTPUT
+# ============================================================
+
 def extract_final_answer(graph_output: dict) -> str:
 
     if isinstance(graph_output, dict):
-        return graph_output.get(
+
+        answer = graph_output.get(
             "final_answer",
-            str(graph_output)
+            ""
         )
 
-    return str(graph_output)
+        return content_to_text(answer)
+
+    return content_to_text(graph_output)
 
 
 formatted_graph_chain = (
@@ -342,17 +375,17 @@ formatted_graph_chain = (
 
 
 # ============================================================
-# 11. FASTAPI APP
+# FASTAPI
 # ============================================================
 
 app = FastAPI(
     title="Placement Ready AI Career Agent",
-    version="2.0"
+    version="1.0"
 )
 
 
 # ============================================================
-# 12. LANGSERVE PLAYGROUND
+# LANGSERVE PLAYGROUND
 # ============================================================
 
 add_routes(
@@ -364,7 +397,7 @@ add_routes(
 
 
 # ============================================================
-# 13. PDF EXTRACTION
+# PDF TEXT EXTRACTION
 # ============================================================
 
 def extract_pdf_text(pdf_bytes: bytes) -> str:
@@ -375,16 +408,16 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
         reader = PdfReader(pdf_file)
 
-        extracted_text = ""
+        pages = []
 
         for page in reader.pages:
 
-            page_text = page.extract_text()
+            text = page.extract_text()
 
-            if page_text:
-                extracted_text += page_text + "\n"
+            if text:
+                pages.append(text)
 
-        return extracted_text.strip()
+        return "\n".join(pages).strip()
 
     except Exception as e:
 
@@ -395,7 +428,7 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
 
 # ============================================================
-# 14. RESUME ANALYSIS API
+# RESUME ANALYSIS API
 # ============================================================
 
 @app.post("/analyze")
@@ -407,28 +440,32 @@ async def analyze_resume(
 ):
 
     if not resume.filename:
+
         raise HTTPException(
             status_code=400,
-            detail="Please select a resume."
+            detail="Please upload a resume PDF."
         )
 
     if not resume.filename.lower().endswith(".pdf"):
+
         raise HTTPException(
             status_code=400,
-            detail="Only PDF resumes are supported."
+            detail="Only PDF files are supported."
         )
 
     pdf_bytes = await resume.read()
 
     if not pdf_bytes:
+
         raise HTTPException(
             status_code=400,
-            detail="The uploaded PDF is empty."
+            detail="Uploaded PDF is empty."
         )
 
     resume_text = extract_pdf_text(pdf_bytes)
 
     if not resume_text:
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -438,264 +475,195 @@ async def analyze_resume(
         )
 
     result = graph.invoke({
+
         "question": question,
+
         "resume": resume_text,
+
         "role": role,
+
         "github_id": github_id
     })
 
-    return {
-        "success": True,
-        "filename": resume.filename,
-        "extracted_characters": len(resume_text),
-        "final_answer": result.get(
+    final_answer = content_to_text(
+        result.get(
             "final_answer",
             "No final answer generated."
         )
+    )
+
+    return {
+
+        "success": True,
+
+        "filename": resume.filename,
+
+        "extracted_characters": len(resume_text),
+
+        "final_answer": final_answer
     }
 
 
 # ============================================================
-# 15. FRONTEND
+# FRONTEND
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def home():
+def home():
 
     return """
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
 
 <head>
 
-<meta charset="UTF-8">
-
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0">
-
-<title>Placement Ready AI</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-
-    margin: 0;
-
-    font-family: Arial, sans-serif;
-
-    background:
-        linear-gradient(
-            135deg,
-            #0f172a,
-            #1e293b
-        );
-
-    min-height: 100vh;
-
-    color: white;
-
-    padding: 40px 20px;
-}
-
-.container {
-
-    max-width: 900px;
-
-    margin: auto;
-}
-
-.header {
-
-    text-align: center;
-
-    margin-bottom: 30px;
-}
-
-.header h1 {
-
-    font-size: 42px;
-
-    margin-bottom: 10px;
-}
-
-.header p {
-
-    color: #cbd5e1;
-
-    font-size: 17px;
-}
-
-.card {
-
-    background: white;
-
-    color: #0f172a;
-
-    border-radius: 20px;
-
-    padding: 30px;
-
-    box-shadow:
-        0 20px 60px
-        rgba(0, 0, 0, 0.3);
-}
-
-.form-group {
-
-    margin-bottom: 22px;
-}
-
-label {
-
-    display: block;
-
-    font-weight: bold;
-
-    margin-bottom: 8px;
-}
-
-input,
-textarea {
-
-    width: 100%;
-
-    padding: 13px;
-
-    border: 1px solid #cbd5e1;
-
-    border-radius: 10px;
-
-    font-size: 15px;
-}
-
-.file-box {
-
-    border: 2px dashed #94a3b8;
-
-    border-radius: 14px;
-
-    padding: 25px;
-
-    text-align: center;
-
-    background: #f8fafc;
-}
-
-button {
-
-    width: 100%;
-
-    padding: 15px;
-
-    border: none;
-
-    border-radius: 11px;
-
-    background: #4f46e5;
-
-    color: white;
-
-    font-size: 17px;
-
-    font-weight: bold;
-
-    cursor: pointer;
-}
-
-button:hover {
-
-    background: #4338ca;
-}
-
-button:disabled {
-
-    background: #94a3b8;
-
-    cursor: not-allowed;
-}
-
-.loading {
-
-    display: none;
-
-    text-align: center;
-
-    margin-top: 20px;
-
-    color: #475569;
-}
-
-.result {
-
-    display: none;
-
-    margin-top: 30px;
-}
-
-.result-box {
-
-    background: #f8fafc;
-
-    border: 1px solid #e2e8f0;
-
-    border-radius: 14px;
-
-    padding: 25px;
-
-    line-height: 1.7;
-
-    white-space: pre-wrap;
-}
-
-.success {
-
-    background: #ecfdf5;
-
-    border: 1px solid #a7f3d0;
-
-    color: #065f46;
-
-    padding: 12px;
-
-    border-radius: 10px;
-
-    margin-bottom: 15px;
-}
-
-.error {
-
-    display: none;
-
-    background: #fef2f2;
-
-    border: 1px solid #fecaca;
-
-    color: #991b1b;
-
-    padding: 12px;
-
-    border-radius: 10px;
-
-    margin-top: 20px;
-}
-
-.footer {
-
-    text-align: center;
-
-    margin-top: 25px;
-
-    color: #94a3b8;
-
-    font-size: 13px;
-}
-
-</style>
+    <title>Placement Ready AI</title>
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1">
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f5f7fb;
+            color: #111827;
+        }
+
+        .container {
+            max-width: 1050px;
+            margin: 40px auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 38px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #6b7280;
+            font-size: 17px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 18px;
+            padding: 30px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+        }
+
+        label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 8px;
+            margin-top: 20px;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            padding: 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 10px;
+            font-size: 15px;
+            outline: none;
+        }
+
+        input:focus,
+        textarea:focus {
+            border-color: #4f46e5;
+        }
+
+        input[type="file"] {
+            background: #f9fafb;
+        }
+
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 25px;
+            padding: 16px;
+            border: none;
+            border-radius: 12px;
+            background: #4f46e5;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #4338ca;
+        }
+
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: none;
+            margin-top: 20px;
+            text-align: center;
+            color: #4f46e5;
+            font-weight: bold;
+        }
+
+        .error {
+            display: none;
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .success {
+            display: none;
+            margin-top: 30px;
+        }
+
+        .success h2 {
+            font-size: 28px;
+            margin-bottom: 15px;
+        }
+
+        .info {
+            padding: 15px;
+            border: 1px solid #a7f3d0;
+            background: #ecfdf5;
+            color: #065f46;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .report {
+            white-space: pre-wrap;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 25px;
+            border-radius: 14px;
+            line-height: 1.7;
+            font-size: 16px;
+        }
+
+    </style>
 
 </head>
 
@@ -704,310 +672,229 @@ button:disabled {
 
 <div class="container">
 
-<div class="header">
+    <div class="header">
 
-<h1>🤖 Placement Ready AI</h1>
+        <h1>🤖 Placement Ready AI</h1>
 
-<p>
-Upload your resume and get an AI-powered career analysis.
-</p>
+        <p>
+            Upload your resume and get an AI-powered
+            career readiness report.
+        </p>
 
-</div>
-
-
-<div class="card">
-
-<form id="resumeForm">
+    </div>
 
 
-<div class="form-group">
+    <div class="card">
 
-<label>📄 Upload Resume PDF</label>
+        <form id="resumeForm">
 
-<div class="file-box">
+            <label>Resume PDF</label>
 
-<input
-    type="file"
-    id="resume"
-    name="resume"
-    accept=".pdf"
-    required
->
-
-<p>
-Select your resume PDF
-</p>
-
-</div>
-
-</div>
+            <input
+                type="file"
+                id="resume"
+                name="resume"
+                accept=".pdf"
+                required
+            >
 
 
-<div class="form-group">
+            <label>Target Job Role</label>
 
-<label>💼 Target Job Role</label>
-
-<input
-    type="text"
-    id="role"
-    name="role"
-    placeholder="Example: AI Engineer"
-    required
->
-
-</div>
+            <input
+                type="text"
+                id="role"
+                name="role"
+                placeholder="Example: AI Engineer"
+                required
+            >
 
 
-<div class="form-group">
+            <label>GitHub Username</label>
 
-<label>🔗 GitHub Username</label>
-
-<input
-    type="text"
-    id="github_id"
-    name="github_id"
-    placeholder="Example: Bharath-max143"
-    required
->
-
-</div>
+            <input
+                type="text"
+                id="github_id"
+                name="github_id"
+                placeholder="Example: Bharath-max143"
+                required
+            >
 
 
-<div class="form-group">
+            <label>Your Question</label>
 
-<label>💬 Your Question</label>
-
-<textarea
-    id="question"
-    name="question"
-    rows="4"
-    placeholder="Example: Am I ready for an AI Engineer role?"
-    required
-></textarea>
-
-</div>
+            <textarea
+                id="question"
+                name="question"
+                placeholder="Example: What should I learn to become placement ready?"
+                required
+            ></textarea>
 
 
-<button
-    type="submit"
-    id="analyzeBtn"
->
-🚀 Analyze Resume
-</button>
+            <button
+                type="submit"
+                id="analyzeBtn"
+            >
+                🚀 Analyze Resume
+            </button>
+
+        </form>
 
 
-</form>
+        <div
+            class="loading"
+            id="loading"
+        >
+            ⏳ Analyzing resume... Please wait.
+        </div>
 
 
-<div
-    class="loading"
-    id="loading"
->
-
-⏳ Analyzing your resume...
-
-<br>
-
-Please wait while the AI agents work.
-
-</div>
+        <div
+            class="error"
+            id="error"
+        ></div>
 
 
-<div
-    class="result"
-    id="result"
->
+        <div
+            class="success"
+            id="success"
+        >
 
-<h2>📊 Career Readiness Report</h2>
+            <h2>
+                📊 Career Readiness Report
+            </h2>
 
-<div
-    class="success"
-    id="successMessage"
->
-</div>
+            <div
+                class="info"
+                id="info"
+            ></div>
 
-<div
-    class="result-box"
-    id="resultBox"
->
-</div>
+            <div
+                class="report"
+                id="report"
+            ></div>
 
-</div>
+        </div>
 
-
-<div
-    class="error"
-    id="errorBox"
->
-</div>
-
-
-</div>
-
-
-<div class="footer">
-
-Placement Ready AI • LangChain + LangGraph + FastAPI
-
-</div>
+    </div>
 
 </div>
 
 
 <script>
 
-const form =
-    document.getElementById("resumeForm");
+const form = document.getElementById("resumeForm");
 
-const button =
-    document.getElementById("analyzeBtn");
+const button = document.getElementById("analyzeBtn");
 
-const loading =
-    document.getElementById("loading");
+const loading = document.getElementById("loading");
 
-const result =
-    document.getElementById("result");
+const errorBox = document.getElementById("error");
 
-const resultBox =
-    document.getElementById("resultBox");
+const successBox = document.getElementById("success");
 
-const successMessage =
-    document.getElementById("successMessage");
+const infoBox = document.getElementById("info");
 
-const errorBox =
-    document.getElementById("errorBox");
+const reportBox = document.getElementById("report");
 
 
-form.addEventListener(
-    "submit",
-    async function(event) {
+form.addEventListener("submit", async function(event) {
 
-        event.preventDefault();
-
-        result.style.display = "none";
-
-        errorBox.style.display = "none";
-
-        loading.style.display = "block";
-
-        button.disabled = true;
-
-        button.innerText = "⏳ Analyzing...";
+    event.preventDefault();
 
 
-        const file =
-            document.getElementById(
-                "resume"
-            ).files[0];
+    errorBox.style.display = "none";
 
-        const role =
-            document.getElementById(
-                "role"
-            ).value;
+    successBox.style.display = "none";
 
-        const github =
-            document.getElementById(
-                "github_id"
-            ).value;
+    loading.style.display = "block";
 
-        const question =
-            document.getElementById(
-                "question"
-            ).value;
+    button.disabled = true;
+
+    button.innerText = "⏳ Analyzing...";
 
 
-        const formData =
-            new FormData();
+    const formData = new FormData();
+
+    formData.append(
+        "resume",
+        document.getElementById("resume").files[0]
+    );
+
+    formData.append(
+        "role",
+        document.getElementById("role").value
+    );
+
+    formData.append(
+        "github_id",
+        document.getElementById("github_id").value
+    );
+
+    formData.append(
+        "question",
+        document.getElementById("question").value
+    );
 
 
-        formData.append(
-            "resume",
-            file
-        );
+    try {
 
-        formData.append(
-            "role",
-            role
-        );
-
-        formData.append(
-            "github_id",
-            github
-        );
-
-        formData.append(
-            "question",
-            question
-        );
-
-
-        try {
-
-            const response =
-                await fetch(
-                    "/analyze",
-                    {
-                        method: "POST",
-                        body: formData
-                    }
-                );
-
-
-            const data =
-                await response.json();
-
-
-            if (!response.ok) {
-
-                throw new Error(
-                    data.detail ||
-                    "Analysis failed."
-                );
-
+        const response = await fetch(
+            "/analyze",
+            {
+                method: "POST",
+                body: formData
             }
+        );
 
 
-            successMessage.innerText =
-                "Resume analyzed successfully. " +
-                "Extracted " +
-                data.extracted_characters +
-                " characters from " +
-                data.filename;
+        const data = await response.json();
 
 
-            resultBox.innerText =
-                data.final_answer;
+        if (!response.ok) {
 
-
-            result.style.display =
-                "block";
-
-
-        } catch (error) {
-
-            errorBox.innerText =
-                "❌ " + error.message;
-
-            errorBox.style.display =
-                "block";
+            throw new Error(
+                data.detail || "Something went wrong."
+            );
 
         }
 
 
-        loading.style.display =
-            "none";
+        infoBox.innerText =
+            "Resume analyzed successfully. " +
+            "Extracted " +
+            data.extracted_characters +
+            " characters from " +
+            data.filename;
 
-        button.disabled =
-            false;
 
-        button.innerText =
-            "🚀 Analyze Resume";
+        reportBox.innerText =
+            data.final_answer;
+
+
+        successBox.style.display = "block";
+
+
+    } catch (error) {
+
+        errorBox.innerText =
+            "❌ " + error.message;
+
+        errorBox.style.display = "block";
 
     }
 
-);
+
+    loading.style.display = "none";
+
+    button.disabled = false;
+
+    button.innerText = "🚀 Analyze Resume";
+
+});
 
 </script>
+
 
 </body>
 
@@ -1016,7 +903,7 @@ form.addEventListener(
 
 
 # ============================================================
-# 16. RUN
+# RUN SERVER
 # ============================================================
 
 if __name__ == "__main__":
