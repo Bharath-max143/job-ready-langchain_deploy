@@ -7,3 +7,5 @@ langchain-google-genai
 langgraph
 pydantic
 sse-starlette
+pypdf
+python-multipart
